@@ -26,11 +26,21 @@ def validar_iban(iban: str) -> bool:
 
 
 def to_amount(x):
-    """Converte valores em float de forma robusta (aceita vírgulas e pontos)."""
+    """Converte valores em float de forma robusta (deteta separadores europeus e ingleses)."""
     if pd.isna(x):
         return 0.0
     s = str(x).strip().replace(" ", "")
-    s = s.replace(".", "").replace(",", ".")  # remove milhar, troca vírgula por ponto
+
+    # Caso contenha apenas vírgula → formato europeu
+    if "," in s and "." not in s:
+        s = s.replace(",", ".")
+    # Caso tenha vírgula e ponto, e vírgula vier depois do ponto → europeu (1.234,56)
+    elif "," in s and "." in s and s.find(",") > s.find("."):
+        s = s.replace(".", "").replace(",", ".")
+    # Caso contrário → formato inglês (1,234.56 ou 1234.56)
+    else:
+        s = s.replace(",", "")
+
     try:
         return round(float(s), 2)
     except ValueError:
@@ -89,7 +99,8 @@ if ficheiro is not None:
             st.warning(f"⚠️ Foram ignoradas {len(invalid_rows)} linha(s) com IBAN de credor inválido.")
         df_valid = df.loc[valid_mask].copy()
 
-        st.write("💰 Total calculado:", round(df_valid["Value"].sum(), 2))
+        total_valor = round(df_valid["Value"].sum(), 2)
+        st.markdown(f"💰 **Total calculado:** {total_valor:.2f} €")
 
         if st.button("Gerar ficheiro XML SEPA"):
             if not empresa or not iban_ok:
@@ -110,8 +121,7 @@ if ficheiro is not None:
             ET.SubElement(GrpHdr, "{%s}MsgId" % ns).text = "MSG-" + datetime.now().strftime("%Y%m%d%H%M%S")
             ET.SubElement(GrpHdr, "{%s}CreDtTm" % ns).text = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
             ET.SubElement(GrpHdr, "{%s}NbOfTxs" % ns).text = str(len(df_valid))
-            ctrl_sum = round(df_valid["Value"].sum(), 2)
-            ET.SubElement(GrpHdr, "{%s}CtrlSum" % ns).text = f"{ctrl_sum:.2f}"
+            ET.SubElement(GrpHdr, "{%s}CtrlSum" % ns).text = f"{total_valor:.2f}"
 
             InitgPty = ET.SubElement(GrpHdr, "{%s}InitgPty" % ns)
             ET.SubElement(InitgPty, "{%s}Nm" % ns).text = empresa
@@ -127,7 +137,7 @@ if ficheiro is not None:
             ET.SubElement(PmtInf, "{%s}PmtMtd" % ns).text = "TRF"
             ET.SubElement(PmtInf, "{%s}BtchBookg" % ns).text = "true"
             ET.SubElement(PmtInf, "{%s}NbOfTxs" % ns).text = str(len(df_valid))
-            ET.SubElement(PmtInf, "{%s}CtrlSum" % ns).text = f"{ctrl_sum:.2f}"
+            ET.SubElement(PmtInf, "{%s}CtrlSum" % ns).text = f"{total_valor:.2f}"
 
             PmtTpInf = ET.SubElement(PmtInf, "{%s}PmtTpInf" % ns)
             SvcLvl = ET.SubElement(PmtTpInf, "{%s}SvcLvl" % ns)
