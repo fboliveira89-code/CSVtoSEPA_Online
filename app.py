@@ -6,7 +6,8 @@ from io import BytesIO
 from datetime import datetime
 import re
 
-# =============== Utilidades ===============
+# =================== FUNÇÕES ===================
+
 def validar_iban(iban: str) -> bool:
     """Valida IBAN (ISO 13616 / mod 97)."""
     if not iban:
@@ -17,30 +18,27 @@ def validar_iban(iban: str) -> bool:
     if not (15 <= len(iban) <= 34):
         return False
     rearr = iban[4:] + iban[:4]
-    # letras -> números (A=10 ... Z=35)
     try:
         conv = "".join(str(int(ch, 36)) for ch in rearr)
         return int(conv) % 97 == 1
     except Exception:
         return False
 
+
 def to_amount(x):
-    """Converte valor para float (aceita 1.234,56 ou 1234.56)."""
+    """Converte valores em float de forma robusta (aceita vírgulas e pontos)."""
     if pd.isna(x):
         return 0.0
-    s = str(x).strip()
-    if s == "":
-        return 0.0
-    # remover separadores de milhar
-    s = s.replace(".", "")
-    # vírgula decimal -> ponto
-    s = s.replace(",", ".")
+    s = str(x).strip().replace(" ", "")
+    s = s.replace(".", "").replace(",", ".")  # remove milhar, troca vírgula por ponto
     try:
-        return float(s)
-    except Exception:
+        return round(float(s), 2)
+    except ValueError:
         return 0.0
 
-# =============== UI ===============
+
+# =================== INTERFACE ===================
+
 st.set_page_config(page_title="Conversor CSV → SEPA (pain.001.001.03)", layout="centered")
 st.title("💶 Conversor CSV → SEPA (pain.001.001.03)")
 st.write("Preenche os dados da tua empresa, descarrega o modelo CSV e carrega o ficheiro preenchido para gerar o XML SEPA.")
@@ -56,8 +54,8 @@ if iban_devedor and not iban_ok:
 elif iban_ok:
     st.success("✅ IBAN do devedor válido.")
 
-# Modelo CSV (compatível Excel PT)
-modelo_csv = "nº;Name;Iban;Value;Ref\n1;Exemplo_Teste;PT50009900009999999999905;100;SUPP\n"
+# Modelo CSV
+modelo_csv = "nº;Name;Iban;Value;Ref\n1;Exemplo_Teste;PT50009900009999999999905;10,00;SUPP\n"
 st.download_button("⬇️ Descarregar modelo CSV", data=modelo_csv, file_name="modelo.csv", mime="text/csv")
 
 # Upload
@@ -65,7 +63,7 @@ ficheiro = st.file_uploader("📂 Carregar ficheiro CSV preenchido", type=["csv"
 
 if ficheiro is not None:
     try:
-        # UTF-8 → fallback ANSI; separador auto (',' ou ';')
+        # Tenta UTF-8 e fallback para ISO-8859-1
         try:
             df = pd.read_csv(ficheiro, sep=None, engine="python", encoding="utf-8")
         except UnicodeDecodeError:
@@ -80,16 +78,18 @@ if ficheiro is not None:
             st.error(f"❌ O ficheiro CSV tem de conter as colunas: {', '.join(obrig)}.")
             st.stop()
 
-        # Normalizar valores numéricos
+        # Normalizar valores
         df["Value"] = df["Value"].apply(to_amount)
-
-        # Validar IBANs dos credores e filtrar inválidos (avisar)
         df["Iban"] = df["Iban"].astype(str)
+
+        # Validar IBANs de credores
         valid_mask = df["Iban"].apply(validar_iban)
         invalid_rows = df.loc[~valid_mask]
         if not invalid_rows.empty:
             st.warning(f"⚠️ Foram ignoradas {len(invalid_rows)} linha(s) com IBAN de credor inválido.")
         df_valid = df.loc[valid_mask].copy()
+
+        st.write("💰 Total calculado:", round(df_valid["Value"].sum(), 2))
 
         if st.button("Gerar ficheiro XML SEPA"):
             if not empresa or not iban_ok:
@@ -99,18 +99,20 @@ if ficheiro is not None:
                 st.error("❌ Não há transações válidas (verifica IBANs e valores).")
                 st.stop()
 
-            # =============== XML SEPA pain.001.001.03 ===============
+            # =================== GERA XML SEPA ===================
             ns = "urn:iso:std:iso:20022:tech:xsd:pain.001.001.03"
             ET.register_namespace("", ns)
             Document = ET.Element("{%s}Document" % ns)
             CstmrCdtTrfInitn = ET.SubElement(Document, "{%s}CstmrCdtTrfInitn" % ns)
 
-            # --- GrpHdr ---
+            # --- Cabeçalho ---
             GrpHdr = ET.SubElement(CstmrCdtTrfInitn, "{%s}GrpHdr" % ns)
             ET.SubElement(GrpHdr, "{%s}MsgId" % ns).text = "MSG-" + datetime.now().strftime("%Y%m%d%H%M%S")
             ET.SubElement(GrpHdr, "{%s}CreDtTm" % ns).text = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
             ET.SubElement(GrpHdr, "{%s}NbOfTxs" % ns).text = str(len(df_valid))
-            ET.SubElement(GrpHdr, "{%s}CtrlSum" % ns).text = f"{df_valid['Value'].sum():.2f}"
+            ctrl_sum = round(df_valid["Value"].sum(), 2)
+            ET.SubElement(GrpHdr, "{%s}CtrlSum" % ns).text = f"{ctrl_sum:.2f}"
+
             InitgPty = ET.SubElement(GrpHdr, "{%s}InitgPty" % ns)
             ET.SubElement(InitgPty, "{%s}Nm" % ns).text = empresa
             if nif.strip():
@@ -119,13 +121,13 @@ if ficheiro is not None:
                 Othr = ET.SubElement(OrgId, "{%s}Othr" % ns)
                 ET.SubElement(Othr, "{%s}Id" % ns).text = nif.strip()
 
-            # --- PmtInf ---
+            # --- Pagamentos ---
             PmtInf = ET.SubElement(CstmrCdtTrfInitn, "{%s}PmtInf" % ns)
             ET.SubElement(PmtInf, "{%s}PmtInfId" % ns).text = "PMT-" + datetime.now().strftime("%Y%m%d")
             ET.SubElement(PmtInf, "{%s}PmtMtd" % ns).text = "TRF"
             ET.SubElement(PmtInf, "{%s}BtchBookg" % ns).text = "true"
             ET.SubElement(PmtInf, "{%s}NbOfTxs" % ns).text = str(len(df_valid))
-            ET.SubElement(PmtInf, "{%s}CtrlSum" % ns).text = f"{df_valid['Value'].sum():.2f}"
+            ET.SubElement(PmtInf, "{%s}CtrlSum" % ns).text = f"{ctrl_sum:.2f}"
 
             PmtTpInf = ET.SubElement(PmtInf, "{%s}PmtTpInf" % ns)
             SvcLvl = ET.SubElement(PmtTpInf, "{%s}SvcLvl" % ns)
@@ -146,7 +148,6 @@ if ficheiro is not None:
             DbtrAcctId = ET.SubElement(DbtrAcct, "{%s}Id" % ns)
             ET.SubElement(DbtrAcctId, "{%s}IBAN" % ns).text = iban_devedor.replace(" ", "")
 
-            # DbtrAgt sem BIC: usar NOTPROVIDED
             DbtrAgt = ET.SubElement(PmtInf, "{%s}DbtrAgt" % ns)
             FinInstnId = ET.SubElement(DbtrAgt, "{%s}FinInstnId" % ns)
             Othr = ET.SubElement(FinInstnId, "{%s}Othr" % ns)
@@ -154,7 +155,7 @@ if ficheiro is not None:
 
             ET.SubElement(PmtInf, "{%s}ChrgBr" % ns).text = "SLEV"
 
-            # --- Transações ---
+            # Transações
             for _, row in df_valid.iterrows():
                 CdtTrfTxInf = ET.SubElement(PmtInf, "{%s}CdtTrfTxInf" % ns)
 
@@ -165,7 +166,6 @@ if ficheiro is not None:
                 InstdAmt = ET.SubElement(Amt, "{%s}InstdAmt" % ns, Ccy="EUR")
                 InstdAmt.text = f"{to_amount(row['Value']):.2f}"
 
-                # CdtrAgt sem BIC
                 CdtrAgt = ET.SubElement(CdtTrfTxInf, "{%s}CdtrAgt" % ns)
                 FinInstnId = ET.SubElement(CdtrAgt, "{%s}FinInstnId" % ns)
                 Othr = ET.SubElement(FinInstnId, "{%s}Othr" % ns)
@@ -181,7 +181,7 @@ if ficheiro is not None:
                 RmtInf = ET.SubElement(CdtTrfTxInf, "{%s}RmtInf" % ns)
                 ET.SubElement(RmtInf, "{%s}Ustrd" % ns).text = str(row.get("Ref", ""))
 
-            # Pretty print
+            # Pretty print XML
             rough = ET.tostring(Document, encoding="utf-8")
             dom = minidom.parseString(rough)
             pretty_xml = dom.toprettyxml(indent="  ", encoding="utf-8")
@@ -196,4 +196,3 @@ if ficheiro is not None:
 
     except Exception as e:
         st.error(f"Erro ao processar o ficheiro: {e}")
-
