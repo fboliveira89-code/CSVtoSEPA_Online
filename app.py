@@ -14,8 +14,8 @@ empresa = st.text_input("Nome da Empresa", placeholder="")
 nif = st.text_input("NIF", placeholder="")
 iban = st.text_input("IBAN", placeholder="", help="Formato: PT50009900009999999999905")
 
-# === Modelo CSV gerado em memória ===
-modelo_csv = "nº,Name,Iban,Value,Ref\n"
+# === Modelo CSV ===
+modelo_csv = "nº;Name;Iban;Value;Ref\n1;Exemplo_Teste;PT50009900009999999999905;100;SUPP\n"
 
 st.download_button(
     label="⬇️ Descarregar modelo CSV",
@@ -29,15 +29,16 @@ ficheiro = st.file_uploader("📂 Carregar ficheiro CSV preenchido", type=["csv"
 
 if ficheiro is not None:
     try:
-        # Tenta UTF-8, se falhar tenta ISO-8859-1 (ANSI)
+        # Tenta UTF-8, se falhar tenta ISO-8859-1
         try:
-            df = pd.read_csv(ficheiro, sep=",", encoding="utf-8")
+            df = pd.read_csv(ficheiro, sep=None, engine="python", encoding="utf-8")
         except UnicodeDecodeError:
             ficheiro.seek(0)
-            df = pd.read_csv(ficheiro, sep=",", encoding="ISO-8859-1")
+            df = pd.read_csv(ficheiro, sep=None, engine="python", encoding="ISO-8859-1")
 
         st.dataframe(df)
 
+        # Verifica se contém as colunas obrigatórias
         campos_validos = all(col in df.columns for col in ["nº", "Name", "Iban", "Value", "Ref"])
 
         if st.button("Gerar ficheiro XML SEPA"):
@@ -46,7 +47,7 @@ if ficheiro is not None:
             elif not empresa or not iban:
                 st.warning("⚠️ Preenche o Nome da Empresa e o IBAN antes de gerar o XML.")
             else:
-                # === Construção do XML SEPA ===
+                # === Criação do XML SEPA ===
                 root = ET.Element("Document", xmlns="urn:iso:std:iso:20022:tech:xsd:pain.001.001.03")
                 CstmrCdtTrfInitn = ET.SubElement(root, "CstmrCdtTrfInitn")
                 GrpHdr = ET.SubElement(CstmrCdtTrfInitn, "GrpHdr")
@@ -65,7 +66,7 @@ if ficheiro is not None:
                 DbtrAcct = ET.SubElement(PmtInf, "DbtrAcct")
                 ET.SubElement(DbtrAcct, "IBAN").text = iban
 
-                # === Transações individuais ===
+                # === Transações ===
                 for _, row in df.iterrows():
                     CdtTrfTxInf = ET.SubElement(PmtInf, "CdtTrfTxInf")
                     PmtId = ET.SubElement(CdtTrfTxInf, "PmtId")
@@ -77,7 +78,7 @@ if ficheiro is not None:
                     Cdtr = ET.SubElement(CdtTrfTxInf, "Cdtr")
                     ET.SubElement(Cdtr, "Nm").text = str(row["Name"])
 
-                # === Geração do ficheiro XML ===
+                # === Exporta o XML ===
                 xml_bytes = BytesIO()
                 ET.ElementTree(root).write(xml_bytes, encoding="utf-8", xml_declaration=True)
 
@@ -91,3 +92,4 @@ if ficheiro is not None:
 
     except Exception as e:
         st.error(f"Erro ao processar o ficheiro: {e}")
+
