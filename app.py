@@ -8,12 +8,13 @@ st.set_page_config(page_title="Conversor CSV → SEPA (pain.001.001.03)", layout
 st.title("💶 Conversor CSV → SEPA (pain.001.001.03)")
 st.write("Preenche os dados da tua empresa, descarrega o modelo CSV e carrega o ficheiro preenchido para gerar o XML SEPA.")
 
+# === Dados da Empresa ===
 st.header("🏢 Dados da Empresa (Devedor)")
-empresa = st.text_input("Nome da Empresa")
-nif = st.text_input("NIF")
-iban = st.text_input("IBAN", help="Formato: PT50009900009999999999905")
+empresa = st.text_input("Nome da Empresa", placeholder="")
+nif = st.text_input("NIF", placeholder="")
+iban = st.text_input("IBAN", placeholder="", help="Formato: PT50009900009999999999905")
 
-# Criar modelo CSV em memória
+# === Modelo CSV gerado em memória ===
 modelo_csv = "nº,Name,Iban,Value,Ref\n"
 
 st.download_button(
@@ -23,11 +24,18 @@ st.download_button(
     mime="text/csv"
 )
 
+# === Upload do CSV preenchido ===
 ficheiro = st.file_uploader("📂 Carregar ficheiro CSV preenchido", type=["csv"])
 
 if ficheiro is not None:
     try:
-        df = pd.read_csv(ficheiro, sep=",")
+        # Tenta UTF-8, se falhar tenta ISO-8859-1 (ANSI)
+        try:
+            df = pd.read_csv(ficheiro, sep=",", encoding="utf-8")
+        except UnicodeDecodeError:
+            ficheiro.seek(0)
+            df = pd.read_csv(ficheiro, sep=",", encoding="ISO-8859-1")
+
         st.dataframe(df)
 
         campos_validos = all(col in df.columns for col in ["nº", "Name", "Iban", "Value", "Ref"])
@@ -38,6 +46,7 @@ if ficheiro is not None:
             elif not empresa or not iban:
                 st.warning("⚠️ Preenche o Nome da Empresa e o IBAN antes de gerar o XML.")
             else:
+                # === Construção do XML SEPA ===
                 root = ET.Element("Document", xmlns="urn:iso:std:iso:20022:tech:xsd:pain.001.001.03")
                 CstmrCdtTrfInitn = ET.SubElement(root, "CstmrCdtTrfInitn")
                 GrpHdr = ET.SubElement(CstmrCdtTrfInitn, "GrpHdr")
@@ -50,11 +59,13 @@ if ficheiro is not None:
                 PmtInf = ET.SubElement(CstmrCdtTrfInitn, "PmtInf")
                 ET.SubElement(PmtInf, "PmtInfId").text = "PMT001"
                 ET.SubElement(PmtInf, "PmtMtd").text = "TRF"
+
                 Dbtr = ET.SubElement(PmtInf, "Dbtr")
                 ET.SubElement(Dbtr, "Nm").text = empresa
                 DbtrAcct = ET.SubElement(PmtInf, "DbtrAcct")
                 ET.SubElement(DbtrAcct, "IBAN").text = iban
 
+                # === Transações individuais ===
                 for _, row in df.iterrows():
                     CdtTrfTxInf = ET.SubElement(PmtInf, "CdtTrfTxInf")
                     PmtId = ET.SubElement(CdtTrfTxInf, "PmtId")
@@ -66,9 +77,11 @@ if ficheiro is not None:
                     Cdtr = ET.SubElement(CdtTrfTxInf, "Cdtr")
                     ET.SubElement(Cdtr, "Nm").text = str(row["Name"])
 
+                # === Geração do ficheiro XML ===
                 xml_bytes = BytesIO()
                 ET.ElementTree(root).write(xml_bytes, encoding="utf-8", xml_declaration=True)
 
+                st.success("✅ Ficheiro SEPA gerado com sucesso!")
                 st.download_button(
                     label="💾 Descarregar XML SEPA",
                     data=xml_bytes.getvalue(),
