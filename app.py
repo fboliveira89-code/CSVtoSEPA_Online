@@ -31,13 +31,10 @@ def to_amount(x):
         return 0.0
     s = str(x).strip().replace(" ", "")
 
-    # Caso contenha apenas vírgula → formato europeu
     if "," in s and "." not in s:
         s = s.replace(",", ".")
-    # Caso tenha vírgula e ponto, e vírgula vier depois do ponto → europeu (1.234,56)
     elif "," in s and "." in s and s.find(",") > s.find("."):
         s = s.replace(".", "").replace(",", ".")
-    # Caso contrário → formato inglês (1,234.56 ou 1234.56)
     else:
         s = s.replace(",", "")
 
@@ -57,6 +54,13 @@ st.header("🏢 Dados da Empresa (Devedor)")
 empresa = st.text_input("Nome da Empresa", value="")
 nif = st.text_input("NIF", value="")
 iban_devedor = st.text_input("IBAN", value="", help="Exemplo: PT50009900009999999999905")
+
+# Novo campo de data de processamento
+data_processamento = st.date_input(
+    "Data de processamento",
+    value=datetime.today().date(),
+    help="Data em que o pagamento será processado"
+)
 
 iban_ok = validar_iban(iban_devedor) if iban_devedor else False
 if iban_devedor and not iban_ok:
@@ -82,17 +86,14 @@ if ficheiro is not None:
 
         st.dataframe(df)
 
-        # Colunas obrigatórias
         obrig = ["nº", "Name", "Iban", "Value", "Ref"]
         if not all(c in df.columns for c in obrig):
             st.error(f"❌ O ficheiro CSV tem de conter as colunas: {', '.join(obrig)}.")
             st.stop()
 
-        # Normalizar valores
         df["Value"] = df["Value"].apply(to_amount)
         df["Iban"] = df["Iban"].astype(str)
 
-        # Validar IBANs de credores
         valid_mask = df["Iban"].apply(validar_iban)
         invalid_rows = df.loc[~valid_mask]
         if not invalid_rows.empty:
@@ -143,7 +144,8 @@ if ficheiro is not None:
             SvcLvl = ET.SubElement(PmtTpInf, "{%s}SvcLvl" % ns)
             ET.SubElement(SvcLvl, "{%s}Cd" % ns).text = "SEPA"
 
-            ET.SubElement(PmtInf, "{%s}ReqdExctnDt" % ns).text = datetime.now().strftime("%Y-%m-%d")
+            # ✅ Usa a data escolhida pelo utilizador
+            ET.SubElement(PmtInf, "{%s}ReqdExctnDt" % ns).text = data_processamento.strftime("%Y-%m-%d")
 
             # Devedor
             Dbtr = ET.SubElement(PmtInf, "{%s}Dbtr" % ns)
@@ -191,7 +193,6 @@ if ficheiro is not None:
                 RmtInf = ET.SubElement(CdtTrfTxInf, "{%s}RmtInf" % ns)
                 ET.SubElement(RmtInf, "{%s}Ustrd" % ns).text = str(row.get("Ref", ""))
 
-            # Pretty print XML
             rough = ET.tostring(Document, encoding="utf-8")
             dom = minidom.parseString(rough)
             pretty_xml = dom.toprettyxml(indent="  ", encoding="utf-8")
